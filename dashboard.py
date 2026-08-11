@@ -1,20 +1,15 @@
 """
 signal-lab dashboard
-
-Reads the SQLite tables built by the pipeline and displays them.
-Computes nothing the backtest didn't already compute.
-
-Run with:  streamlit run dashboard.py
+Run with: streamlit run dashboard.py
 """
 
 import sqlite3
-import numpy as np
 import pandas as pd
 import streamlit as st
 
+from strategy import build_and_run, metrics
+
 DB_PATH = "data/market.db"
-TRADING_DAYS = 252
-COST = 0.001
 
 st.set_page_config(page_title="signal-lab", layout="wide")
 
@@ -28,33 +23,6 @@ def load(query):
         conn.close()
 
 
-def rebuild_strategy(df):
-    """Identical logic to backtest.py. Needed for the per-ticker view."""
-    df = df.sort_values(["symbol", "date"]).reset_index(drop=True)
-    df["signal"] = np.where(
-        (df["sma_fast"] > df["sma_slow"]) & (df["sentiment"] >= 0), 1, 0
-    )
-    df["position"] = df.groupby("symbol")["signal"].shift(1).fillna(0)
-    prev = df.groupby("symbol")["position"].shift(1).fillna(0)
-    df["strategy_return"] = (
-        df["position"] * df["daily_return"]
-        - COST * (df["position"] - prev).abs()
-    ).fillna(0)
-    return df
-
-
-def metrics(returns):
-    returns = returns.fillna(0)
-    sharpe = 0.0 if returns.std() == 0 else (returns.mean() / returns.std()) * np.sqrt(TRADING_DAYS)
-    equity = (1 + returns).cumprod()
-    return {
-        "Return": equity.iloc[-1] - 1,
-        "Sharpe": sharpe,
-        "Max drawdown": (equity / equity.cummax() - 1).min(),
-    }
-
-
-# --- load -------------------------------------------------------------
 try:
     features = load("SELECT * FROM features")
     equity = load("SELECT * FROM backtest_equity")
@@ -73,12 +41,11 @@ except Exception as e:
 
 features["date"] = pd.to_datetime(features["date"])
 equity["date"] = pd.to_datetime(equity["date"])
-features = rebuild_strategy(features)
+features = build_and_run(features)
 
 n_days = features["date"].nunique()
 n_sent = int((features["sentiment"] != 0).sum())
 
-# --- page -------------------------------------------------------------
 st.title("signal-lab")
 st.markdown(
     "An LLM-augmented news-to-signal research pipeline. Financial news and prices in, "
@@ -92,18 +59,14 @@ st.markdown(
 
 st.divider()
 
-# Results
 port = features.groupby("date")["strategy_return"].mean().fillna(0)
 bench = features.groupby("date")["daily_return"].mean().fillna(0)
 
 st.subheader("Strategy vs. buy-and-hold")
-
-comparison = pd.DataFrame(
-    {"Strategy": metrics(port), "Buy and hold": metrics(bench)}
-).T
+comparison = pd.DataFrame({"Strategy": metrics(port), "Buy and hold": metrics(bench)}).T
 st.dataframe(
     comparison.style.format(
-        {"Return": "{:.2%}", "Sharpe": "{:.2f}", "Max drawdown": "{:.2%}"}
+        {"Total return": "{:.2%}", "Sharpe": "{:.2f}", "Max drawdown": "{:.2%}", "Hit rate": "{:.0%}"}
     ),
     use_container_width=True,
 )
@@ -116,15 +79,13 @@ st.caption(
     "the short-term trend is down or sentiment is negative — trading some return for less risk."
 )
 
-# Per ticker
 st.subheader("Per ticker")
-
 per_ticker = pd.DataFrame(
     {sym: metrics(sub["strategy_return"]) for sym, sub in features.groupby("symbol")}
 ).T
 st.dataframe(
     per_ticker.style.format(
-        {"Return": "{:.2%}", "Sharpe": "{:.2f}", "Max drawdown": "{:.2%}"}
+        {"Total return": "{:.2%}", "Sharpe": "{:.2f}", "Max drawdown": "{:.2%}", "Hit rate": "{:.0%}"}
     ),
     use_container_width=True,
 )
@@ -138,14 +99,12 @@ sub = features[features["symbol"] == symbol].set_index("date")
 st.line_chart(sub[["close", "sma_fast", "sma_slow"]])
 st.caption("Close price with 5-day and 20-day moving averages.")
 
-# LLM layer
 st.subheader("LLM news extraction")
 st.markdown(
     "Each article is passed to an LLM constrained to a strict JSON schema, which returns "
     "an event type, directional lean, and a one-line rationale. Alpha Vantage's own "
     "sentiment label is shown alongside for comparison — neither is ground truth."
 )
-
 if llm.empty:
     st.info("No LLM analysis yet. Run `python llm_extract.py`.")
 else:
@@ -155,7 +114,6 @@ else:
         hide_index=True,
     )
 
-# Limitations
 st.subheader("Methodology and limitations")
 st.markdown(
     f"""
@@ -170,8 +128,6 @@ each ticker). Every position change is charged 0.1%.
   sentiment layer demonstrates the pipeline rather than a statistically powered factor.
 - Fixed transaction cost, no slippage, no shorting, no position sizing, daily closes only.
 - Five hand-picked tickers, which is itself a selection bias.
-- Strategy logic is duplicated between `backtest.py` and this file; it should live in a
-  shared module.
 """
 )
 
