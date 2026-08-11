@@ -4,3 +4,4 @@ streamlit
 openai
 pandas
 numpy
+pytest
