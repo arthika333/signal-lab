@@ -4,7 +4,6 @@
 
 An LLM-augmented news-to-signal research pipeline for equities. It ingests market data and financial news, uses an LLM to extract structured judgments from unstructured headlines, combines those with technical indicators into a trading signal, and backtests the result **without lookahead bias and with transaction costs.**
 
-**[Live dashboard →](http://localhost:8501/)**
 
 <img width="889" height="266" alt="image" src="https://github.com/user-attachments/assets/37380028-d357-4342-9fdf-b127ba92473e" />
 ---
